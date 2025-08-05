@@ -89,7 +89,7 @@ def update_games_table(year):
                 pass
 
     cursor.executemany("""
-    INSERT IGNORE INTO games (game_id, season, game_type, date, home_team_id, away_team_id, home_score, away_score, game_outcome, winning_goalie_id, winning_goal_scorer_id, series_status_round)
+    INSERT IGNORE INTO games (game_id, season_id, game_type, date, home_team_id, away_team_id, home_score, away_score, game_outcome, winning_goalie_id, winning_goal_scorer_id, series_status_round)
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, games)
     connection.commit()
@@ -222,6 +222,7 @@ def update_seasons_end_standings(season_id):
 
 def update_events_table(season_id):
     #grab each game_id from the games table
+    url_base = "https://api-web.nhle.com/v1/gamecenter/"#2023020204/play-by-play
 
     cursor.execute("""
         SELECT DISTINCT game_id
