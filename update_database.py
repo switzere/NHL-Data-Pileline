@@ -95,6 +95,7 @@ def update_games_table(year):
     connection.commit()
 
 def update_seasons_end_standings(season_id):
+    url_base = 'https://api-web.nhle.com/v1/standings/'
     #get info for the season for each team
 
     # Get data from games table
@@ -107,8 +108,25 @@ def update_seasons_end_standings(season_id):
 
     games_data = cursor.fetchall()
 
+    url = url_base + str(season_id)[:4] + "-01-10"
+
+    season_dict = {}
+
+    response = requests.get(url)
+    if response.text.strip():
+        try:
+            data = json.loads(response.text)
+            if data['standings']:
+                season_dict = {team['teamAbbrev']['default']: team for team in data['standings']}
+
+        except json.JSONDecodeError:
+            pass
+
     for team_id in teams_dict['team_id']:
         print(team_id)
+
+        team_abbreviation = teams_dict['team_abbreviation'][teams_dict['team_id'].index(team_id)]
+
         seasons_end_standings_data = []
 
         #print(season_id)
@@ -132,6 +150,13 @@ def update_seasons_end_standings(season_id):
         games_played = 0
         preseason_games_played = 0
         playoff_games_played = 0
+        conference_name = ''
+        division_name = ''
+
+        if season_dict:
+            team_data = season_dict.get(team_abbreviation, {})
+            conference_name = team_data.get('conferenceName', '')
+            division_name = team_data.get('divisionName', '')
 
         for game in games_data:
             if game[0] == season_id:
@@ -208,14 +233,14 @@ def update_seasons_end_standings(season_id):
 
         points = 2 * wins + ot_losses
         #print(f"Season_id: {season_id}, Team_id: {team_id}, Wins: {wins}, Losses: {losses}, OT_Losses: {ot_losses}, Points: {points}, Goals_For: {goals_for}, Goals_Against: {goals_against}")
-        seasons_end_standings_data.append((season_id, team_id, wins, losses, ot_losses, points, games_played, goals_for, goals_against, preseason_wins, preseason_losses, preseason_ot_losses, preseason_goals_for, preseason_goals_against, preseason_games_played, playoff_wins, playoff_losses, playoff_ot_losses, playoff_goals_for, playoff_goals_against, playoff_games_played))
+        seasons_end_standings_data.append((season_id, team_id, wins, losses, ot_losses, points, games_played, goals_for, goals_against, preseason_wins, preseason_losses, preseason_ot_losses, preseason_goals_for, preseason_goals_against, preseason_games_played, playoff_wins, playoff_losses, playoff_ot_losses, playoff_goals_for, playoff_goals_against, playoff_games_played, conference_name, division_name))
 
 
         print(f"Standings: {seasons_end_standings_data}")
         # Populate seasons_end_standings table
         cursor.executemany("""
-        INSERT IGNORE INTO seasons_end_standings (season_id, team_id, wins, losses, ot_losses, points, games_played, goals_for, goals_against, preseason_wins, preseason_losses, preseason_ot_losses, preseason_goals_for, preseason_goals_against, preseason_games_played, playoff_wins, playoff_losses, playoff_ot_losses, playoff_goals_for, playoff_goals_against, playoff_games_played)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT IGNORE INTO seasons_end_standings (season_id, team_id, wins, losses, ot_losses, points, games_played, goals_for, goals_against, preseason_wins, preseason_losses, preseason_ot_losses, preseason_goals_for, preseason_goals_against, preseason_games_played, playoff_wins, playoff_losses, playoff_ot_losses, playoff_goals_for, playoff_goals_against, playoff_games_played, conference_name, division_name)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, seasons_end_standings_data)
 
         connection.commit()
