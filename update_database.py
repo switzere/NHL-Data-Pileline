@@ -3,32 +3,48 @@ import requests
 from datetime import datetime, timedelta
 import mysql.connector
 from config import db_config
+from config import db_config_local
 import pandas as pd
 import json
 import copy
 import os
 
 teams_dict = {
-    'team_id': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 46, 47, 48, 49, 52, 53, 54, 55, 56],
-    'team_name': ['New Jersey Devils', 'New York Islanders', 'New York Rangers', 'Philadelphia Flyers', 'Pittsburgh Penguins', 'Boston Bruins', 'Buffalo Sabres', 'Montreal Canadiens', 'Ottawa Senators', 'Toronto Maple Leafs', 'Atlanta Thrashers', 'Carolina Hurricanes', 'Florida Panthers', 'Tampa Bay Lightning', 'Washington Capitals', 'Chicago Blackhawks', 'Detroit Red Wings', 'Nashville Predators', 'St Louis Blues', 'Calgary Flames', 'Colorado Avalanche', 'Edmonton Oilers', 'Vancouver Canucks', 'Anaheim Ducks', 'Dallas Stars', 'Los Angeles Kings', 'Pheonix Coyotes', 'San Jose Sharks', 'Columbus Blue Jackets', 'Minnesota Wild', 'Minnesota North Stars', 'Quebec Nordique', 'Winnipeg Jets (1979)', 'Hartford Whalers', 'Colorado Rockies', 'Oakland Seals', 'Atlanta Flames', 'Kansas City Scouts', 'Cleveland Barons', 'Winnipeg Jets', 'Arizona Coyotes', 'Vegas Golden Knights', 'Seattle Kraken', 'California Golden Seals'],
-    'team_abbreviation': ['NJD', 'NYI', 'NYR', 'PHI', 'PIT', 'BOS', 'BUF', 'MTL', 'OTT', 'TOR', 'ATL', 'CAR', 'FLA', 'TBL', 'WSH', 'CHI', 'DET', 'NSH', 'STL', 'CGY', 'COL', 'EDM', 'VAN', 'ANA', 'DAL', 'LAK', 'PHX', 'SJS', 'CBJ', 'MIN', 'MNS', 'QUE', 'WIN', 'HFD', 'CLR', 'OAK', 'AFM', 'KCS', 'CLE', 'WPG', 'ARI', 'VGK', 'SEA', 'CGS']
+    'team_id': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 46, 47, 48, 49, 52, 53, 54, 55, 56, 59, 68],
+    'team_name': ['New Jersey Devils', 'New York Islanders', 'New York Rangers', 'Philadelphia Flyers', 'Pittsburgh Penguins', 'Boston Bruins', 'Buffalo Sabres', 'Montreal Canadiens', 'Ottawa Senators', 'Toronto Maple Leafs', 'Atlanta Thrashers', 'Carolina Hurricanes', 'Florida Panthers', 'Tampa Bay Lightning', 'Washington Capitals', 'Chicago Blackhawks', 'Detroit Red Wings', 'Nashville Predators', 'St Louis Blues', 'Calgary Flames', 'Colorado Avalanche', 'Edmonton Oilers', 'Vancouver Canucks', 'Anaheim Ducks', 'Dallas Stars', 'Los Angeles Kings', 'Pheonix Coyotes', 'San Jose Sharks', 'Columbus Blue Jackets', 'Minnesota Wild', 'Minnesota North Stars', 'Quebec Nordique', 'Winnipeg Jets (1979)', 'Hartford Whalers', 'Colorado Rockies', 'Oakland Seals', 'Atlanta Flames', 'Kansas City Scouts', 'Cleveland Barons', 'Winnipeg Jets', 'Arizona Coyotes', 'Vegas Golden Knights', 'Seattle Kraken', 'California Golden Seals', 'Utah Hockey Club', 'Utah Mammoth'],
+    'team_abbreviation': ['NJD', 'NYI', 'NYR', 'PHI', 'PIT', 'BOS', 'BUF', 'MTL', 'OTT', 'TOR', 'ATL', 'CAR', 'FLA', 'TBL', 'WSH', 'CHI', 'DET', 'NSH', 'STL', 'CGY', 'COL', 'EDM', 'VAN', 'ANA', 'DAL', 'LAK', 'PHX', 'SJS', 'CBJ', 'MIN', 'MNS', 'QUE', 'WIN', 'HFD', 'CLR', 'OAK', 'AFM', 'KCS', 'CLE', 'WPG', 'ARI', 'VGK', 'SEA', 'CGS', 'UTA','UTA']
 }
 
 # Establish connection
 connection = mysql.connector.connect(
     host=db_config["host"],
+    port=db_config["port"],
     user=db_config["user"],
     password=db_config["password"],
     database=db_config["database"]
 )
+#local connection
+# connection = mysql.connector.connect(
+#     host=db_config_local["host"],
+#     port=db_config_local["port"],
+#     user=db_config_local["user"],
+#     password=db_config_local["password"],
+#     database=db_config_local["database"]
+# )
 cursor = connection.cursor()
 
 
 
-def get_most_recent_season_from_db():
-    cursor.execute("SELECT MAX(season_id) FROM games")
+def get_last_date_updated_db():
+    cursor.execute('''
+        SELECT game_id, season_id, date
+        FROM games 
+        WHERE game_outcome != '' 
+        ORDER BY date DESC 
+        LIMIT 1;
+    ''')
     result = cursor.fetchone()
-    return result[0] if result else None
+    return result if result else (None, None, None) 
 
 def get_current_season():
     url = "https://api-web.nhle.com/v1/roster-season/TOR"
@@ -48,6 +64,16 @@ def update_seasons_table(season_id):
 def update_games_table(year):
     games = []
     url_base = 'https://api-web.nhle.com/v1/club-schedule-season/'
+    updated_games = []
+    today = datetime.now().date()
+
+    # Get existing game IDs
+    season_id = str(year) + str(year + 1)
+    cursor.execute("SELECT game_id FROM games WHERE season_id = %s AND game_outcome != ''", (int(season_id),))
+    played_game_ids = {row[0] for row in cursor.fetchall()}
+
+    print(f"Found {len(played_game_ids)} played games for season {season_id}")  
+    
 
     #for each team get the games for this season
     for abv in teams_dict['team_abbreviation']:
@@ -57,7 +83,7 @@ def update_games_table(year):
         print(f"Fetching games from {start_date} to {end_date} for team {abv}")
 
 
-        url = url_base + abv + '/' + str(year) + str(year + 1)
+        url = url_base + abv + '/' + season_id
 
         response = requests.get(url)
         print(year)
@@ -66,6 +92,18 @@ def update_games_table(year):
                 data = json.loads(response.text)
                 if data['games']:
                     for g in data['games']:
+                        if g['id'] in played_game_ids or g['id'] in updated_games:
+                            print(f"Skipping already played game ID: {g['id']}")
+                            continue
+                        elif datetime.strptime(g['gameDate'], '%Y-%m-%d').date() > today:
+                            #technically this can allow future games if they are scheduled for today.
+                            #probably fine as it won't update anything and it can make sure the schedule is current
+                            print(f"Skipping future game ID: {g['id']} scheduled on {g['gameDate']}")
+                            continue
+                        updated_games.append(g['id'])
+
+
+
                         #print(g)
                         game = (
                             g['id'],
@@ -82,17 +120,36 @@ def update_games_table(year):
                             g.get('winningGoalScorer', {}).get('playerId', -1),  # Use get method with default value -1
                             g.get('seriesStatus', {}).get('round', -1),  # Use get method with default value ''
                         )
-                        #if homeTeamId or awayTeamId is not in teams_dict, skip it
-                        if game[4] in teams_dict['team_id'] and game[5] in teams_dict['team_id']:
+                        if  g.get('homeTeam', {}).get('id') in teams_dict['team_id'] and g.get('awayTeam', {}).get('id') in teams_dict['team_id']:
                             games.append(game)
+                        else:
+                            print(f"Skipping game {g['id']} due to unknown team IDs: Home {g.get('homeTeam', {}).get('id')}, Away {g.get('awayTeam', {}).get('id')}")
+                        
+
             except json.JSONDecodeError:
                 pass
 
+    #print(games)
     cursor.executemany("""
-    INSERT IGNORE INTO games (game_id, season_id, game_type, date, home_team_id, away_team_id, home_score, away_score, game_outcome, winning_goalie_id, winning_goal_scorer_id, series_status_round)
+    INSERT INTO games (game_id, season_id, game_type, date, home_team_id, away_team_id, home_score, away_score, game_outcome, winning_goalie_id, winning_goal_scorer_id, series_status_round)
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    ON DUPLICATE KEY UPDATE
+        season_id = VALUES(season_id),
+        game_type = VALUES(game_type),
+        date = VALUES(date),
+        home_team_id = VALUES(home_team_id),
+        away_team_id = VALUES(away_team_id),
+        home_score = VALUES(home_score),
+        away_score = VALUES(away_score),
+        game_outcome = VALUES(game_outcome),
+        winning_goalie_id = VALUES(winning_goalie_id),
+        winning_goal_scorer_id = VALUES(winning_goal_scorer_id),
+        series_status_round = VALUES(series_status_round)
     """, games)
     connection.commit()
+
+    print("Updated games:", updated_games)
+    return updated_games
 
 def update_seasons_end_standings(season_id):
     url_base = 'https://api-web.nhle.com/v1/standings/'
@@ -101,7 +158,7 @@ def update_seasons_end_standings(season_id):
     # Get data from games table
 
     cursor.execute("""
-    SELECT season_id, home_team_id, away_team_id, home_score, away_score, game_outcome, game_type
+    SELECT season_id, home_team_id, away_team_id, home_score, away_score, game_outcome, game_type, date
     FROM games
     WHERE season_id = %s
     """, (season_id,))
@@ -123,7 +180,6 @@ def update_seasons_end_standings(season_id):
             pass
 
     for team_id in teams_dict['team_id']:
-        print(team_id)
 
         team_abbreviation = teams_dict['team_abbreviation'][teams_dict['team_id'].index(team_id)]
 
@@ -159,77 +215,78 @@ def update_seasons_end_standings(season_id):
             division_name = team_data.get('divisionName', '')
 
         for game in games_data:
-            if game[0] == season_id:
-                if game[1] == team_id:
-                    print(game)
-                    if game[6] == 1:
-                        preseason_games_played += 1
-                        preseason_goals_for += game[3]
-                        preseason_goals_against += game[4]
-                        if game[3] > game[4]:
-                            preseason_wins += 1
-                        elif game[3] < game[4]:
-                            if game[5] == 'OT' or game[5] == 'SO':
-                                preseason_ot_losses += 1
-                            else:
-                                preseason_losses += 1
-                    elif game[6] == 2:
-                        games_played += 1
-                        goals_for += game[3]
-                        goals_against += game[4]
-                        if game[3] > game[4]:
-                            wins += 1
-                        elif game[3] < game[4]:
-                            if game[5] == 'OT' or game[5] == 'SO':
-                                ot_losses += 1
-                            else:
-                                losses += 1
-                    elif game[6] == 3:
-                        playoff_games_played += 1
-                        playoff_goals_for += game[3]
-                        playoff_goals_against += game[4]
-                        if game[3] > game[4]:
-                            playoff_wins += 1
-                        elif game[3] < game[4]:
-                            if game[5] == 'OT' or game[5] == 'SO':
-                                playoff_ot_losses += 1
-                            else:
-                                playoff_losses += 1
-                elif game[2] == team_id:
-                    #print(game)
-                    if game[6] == 1:
-                        preseason_games_played += 1
-                        preseason_goals_for += game[4]
-                        preseason_goals_against += game[3]
-                        if game[4] > game[3]:
-                            preseason_wins += 1
-                        elif game[4] < game[3]:
-                            if game[5] == 'OT' or game[5] == 'SO':
-                                preseason_ot_losses += 1
-                            else:
-                                preseason_losses += 1
-                    elif game[6] == 2:
-                        games_played += 1
-                        goals_for += game[4]
-                        goals_against += game[3]
-                        if game[4] > game[3]:
-                            wins += 1
-                        elif game[4] < game[3]:
-                            if game[5] == 'OT' or game[5] == 'SO':
-                                ot_losses += 1
-                            else:
-                                losses += 1
-                    elif game[6] == 3:
-                        playoff_games_played += 1
-                        playoff_goals_for += game[4]
-                        playoff_goals_against += game[3]
-                        if game[4] > game[3]:
-                            playoff_wins += 1
-                        elif game[4] < game[3]:
-                            if game[5] == 'OT' or game[5] == 'SO':
-                                playoff_ot_losses += 1
-                            else:
-                                playoff_losses += 1
+            if game[5] != '':
+                if game[0] == season_id:
+                    if game[1] == team_id:
+                        print(game)
+                        if game[6] == 1:
+                            preseason_games_played += 1
+                            preseason_goals_for += game[3]
+                            preseason_goals_against += game[4]
+                            if game[3] > game[4]:
+                                preseason_wins += 1
+                            elif game[3] < game[4]:
+                                if game[5] == 'OT' or game[5] == 'SO':
+                                    preseason_ot_losses += 1
+                                else:
+                                    preseason_losses += 1
+                        elif game[6] == 2:
+                            games_played += 1
+                            goals_for += game[3]
+                            goals_against += game[4]
+                            if game[3] > game[4]:
+                                wins += 1
+                            elif game[3] < game[4]:
+                                if game[5] == 'OT' or game[5] == 'SO':
+                                    ot_losses += 1
+                                else:
+                                    losses += 1
+                        elif game[6] == 3:
+                            playoff_games_played += 1
+                            playoff_goals_for += game[3]
+                            playoff_goals_against += game[4]
+                            if game[3] > game[4]:
+                                playoff_wins += 1
+                            elif game[3] < game[4]:
+                                if game[5] == 'OT' or game[5] == 'SO':
+                                    playoff_ot_losses += 1
+                                else:
+                                    playoff_losses += 1
+                    elif game[2] == team_id:
+                        print(game)
+                        if game[6] == 1:
+                            preseason_games_played += 1
+                            preseason_goals_for += game[4]
+                            preseason_goals_against += game[3]
+                            if game[4] > game[3]:
+                                preseason_wins += 1
+                            elif game[4] < game[3]:
+                                if game[5] == 'OT' or game[5] == 'SO':
+                                    preseason_ot_losses += 1
+                                else:
+                                    preseason_losses += 1
+                        elif game[6] == 2:
+                            games_played += 1
+                            goals_for += game[4]
+                            goals_against += game[3]
+                            if game[4] > game[3]:
+                                wins += 1
+                            elif game[4] < game[3]:
+                                if game[5] == 'OT' or game[5] == 'SO':
+                                    ot_losses += 1
+                                else:
+                                    losses += 1
+                        elif game[6] == 3:
+                            playoff_games_played += 1
+                            playoff_goals_for += game[4]
+                            playoff_goals_against += game[3]
+                            if game[4] > game[3]:
+                                playoff_wins += 1
+                            elif game[4] < game[3]:
+                                if game[5] == 'OT' or game[5] == 'SO':
+                                    playoff_ot_losses += 1
+                                else:
+                                    playoff_losses += 1
 
         points = 2 * wins + ot_losses
         #print(f"Season_id: {season_id}, Team_id: {team_id}, Wins: {wins}, Losses: {losses}, OT_Losses: {ot_losses}, Points: {points}, Goals_For: {goals_for}, Goals_Against: {goals_against}")
@@ -245,21 +302,24 @@ def update_seasons_end_standings(season_id):
 
         connection.commit()
 
-def update_events_table(season_id):
+def update_events_table(season_id, updated_game_ids):
     #grab each game_id from the games table
     url_base = "https://api-web.nhle.com/v1/gamecenter/"#2023020204/play-by-play
 
-    cursor.execute("""
-        SELECT DISTINCT game_id
-        FROM games
-        WHERE season_id = %s
-    """, (season_id,))
+    # cursor.execute("""
+    #     SELECT DISTINCT game_id
+    #     FROM games
+    #     WHERE season_id = %s
+    # """, (season_id,))
 
-    game_ids = cursor.fetchall()
+    game_ids = updated_game_ids
 
-    for id in game_ids:
+    total_games = len(game_ids)
 
-        url = url_base + str(id[0]) + '/play-by-play'
+    for idx, game_id in enumerate(game_ids, 1):
+        if idx % 100 == 0 or idx == 1 or idx == total_games:
+            print(f"Processing game {idx} of {total_games} (game_id: {game_id}) for season {season_id}")
+        url = url_base + str(game_id) + '/play-by-play'
         #print(url)
         response = requests.get(url)
 
@@ -277,7 +337,7 @@ def update_events_table(season_id):
                         #print(details)
                         play_data = (
                             play.get('eventId', -1),
-                            id[0],
+                            game_id,
                             periodDescriptor.get('number', -1),
                             periodDescriptor.get('periodType', ''),
                             play.get('timeInPeriod', ''),
@@ -553,43 +613,50 @@ def update_players_table(season_id):
 
 def main():
 
-    last_season_in_db = get_most_recent_season_from_db()
+    last_game_id, last_season_id, last_date = get_last_date_updated_db()
     current_season = get_current_season()
 
-    print(f"Last season in DB: {last_season_in_db}")
+    print(f"Last game ID: {last_game_id}")
+    print(f"Last season in DB: {last_season_id}")
+    print(f"Last date: {last_date}")
     print(f"Current season: {current_season}")
 
-    last_season_int = int(str(last_season_in_db)[:4])
+    #last_season_int = 2024# = int(str(last_season_in_db)[:4]) not used because up to date
     current_season_int = int(str(current_season)[:4])
 
     #do everything for each season
-    for year in range(last_season_int, current_season_int + 1):
+    for year in range(current_season_int, current_season_int + 1):
         season_id = int(str(year) + str(year + 1))
 
-        update_seasons_table(season_id)
+        print("update seasons table")
+        #update_seasons_table(season_id)
 
-
-        update_games_table(year)
+        print("update games table")
+        updated_game_ids = update_games_table(year)
 
         #seasons_end_standings --------------------------------------------------
 
-        update_seasons_end_standings(season_id)
+        print("update seasons end standings table")
+        update_seasons_end_standings(season_id)#could use updated_game_ids but it's a lot of extra logic for not much more efficiency
 
         #event table --------------------------------------------
 
-        update_events_table(season_id)
+        print("update events table")
+        update_events_table(season_id, updated_game_ids)#updated_game_ids limits repeating events and saves a lot of time
 
         #roster_players table --------------------------------------------------
 
+        print("update roster players table")
         update_roster_players_table(season_id)
 
-        
         #players_season table --------------------------------------------------
 
+        print("update players season table")
         update_players_season_table(season_id)
 
         #players table --------------------------------------------------
 
+        print("update players table")
         update_players_table(season_id)
 
 
