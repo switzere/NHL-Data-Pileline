@@ -8,6 +8,23 @@ import pandas as pd
 import json
 import copy
 import os
+import logging
+import sys
+import traceback
+
+def setup_logging():
+    """Configure logging for both file and console output"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout)  # This will go to your log file via cron redirect
+        ]
+    )
+    return logging.getLogger(__name__)
+
+# Create logger
+logger = setup_logging()
 
 teams_dict = {
     'team_id': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 46, 47, 48, 49, 52, 53, 54, 55, 56, 59, 68],
@@ -39,7 +56,7 @@ def get_last_date_updated_db():
     cursor.execute('''
         SELECT game_id, season_id, date
         FROM games 
-        WHERE game_outcome != '' 
+        WHERE game_outcome IS NOT NULL
         ORDER BY date DESC 
         LIMIT 1;
     ''')
@@ -69,67 +86,67 @@ def update_games_table(year):
 
     # Get existing game IDs
     season_id = str(year) + str(year + 1)
-    cursor.execute("SELECT game_id FROM games WHERE season_id = %s AND game_outcome != ''", (int(season_id),))
+    cursor.execute("SELECT game_id FROM games WHERE season_id = %s AND game_outcome IS NOT NULL", (int(season_id),))
     played_game_ids = {row[0] for row in cursor.fetchall()}
 
-    print(f"Found {len(played_game_ids)} played games for season {season_id}")  
+    logger.info(f"Found {len(played_game_ids)} played games for season {season_id}")  
     
 
     #for each team get the games for this season
     for abv in teams_dict['team_abbreviation']:
-        print(f"Processing games for team: {abv} in season starting {year}")
+        logger.info(f"Processing games for team: {abv} in season starting {year}")
         start_date = f"{year}-10-01"
         end_date = f"{year + 1}-04-30"
-        print(f"Fetching games from {start_date} to {end_date} for team {abv}")
+        logger.info(f"Fetching games from {start_date} to {end_date} for team {abv}")
 
 
         url = url_base + abv + '/' + season_id
 
         response = requests.get(url)
-        print(year)
+        logger.info(year)
         if response.text.strip():
             try:
                 data = json.loads(response.text)
                 if data['games']:
                     for g in data['games']:
                         if g['id'] in played_game_ids or g['id'] in updated_games:
-                            print(f"Skipping already played game ID: {g['id']}")
+                            logger.info(f"Skipping already played game ID: {g['id']}")
                             continue
                         elif datetime.strptime(g['gameDate'], '%Y-%m-%d').date() > today:
                             #technically this can allow future games if they are scheduled for today.
                             #probably fine as it won't update anything and it can make sure the schedule is current
-                            print(f"Skipping future game ID: {g['id']} scheduled on {g['gameDate']}")
+                            logger.info(f"Skipping future game ID: {g['id']} scheduled on {g['gameDate']}")
                             continue
                         updated_games.append(g['id'])
 
 
 
-                        #print(g)
+                        #logger.info(g)
                         game = (
                             g['id'],
-                            g.get('season', ''),
-                            g.get('gameType', -1),
+                            g.get('season', None),
+                            g.get('gameType', None),
                             g.get('gameDate', None),
-                            g.get('homeTeam', {}).get('id', -1),
-                            g.get('awayTeam', {}).get('id', -1),
-                            g.get('homeTeam', {}).get('score', -1),
-                            g.get('awayTeam', {}).get('score', -1),
+                            g.get('homeTeam', {}).get('id', None),
+                            g.get('awayTeam', {}).get('id', None),
+                            g.get('homeTeam', {}).get('score', None),
+                            g.get('awayTeam', {}).get('score', None),
 
-                            g.get('gameOutcome', {}).get('lastPeriodType', ''),  # Use get method with default value ''
-                            g.get('winningGoalie', {}).get('playerId', -1),  # Use get method with default value -1
-                            g.get('winningGoalScorer', {}).get('playerId', -1),  # Use get method with default value -1
-                            g.get('seriesStatus', {}).get('round', -1),  # Use get method with default value ''
+                            g.get('gameOutcome', {}).get('lastPeriodType', None),  # Use get method with default value None
+                            g.get('winningGoalie', {}).get('playerId', None),  # Use get method with default value None
+                            g.get('winningGoalScorer', {}).get('playerId', None),  # Use get method with default value None
+                            g.get('seriesStatus', {}).get('round', None),  # Use get method with default value None
                         )
                         if  g.get('homeTeam', {}).get('id') in teams_dict['team_id'] and g.get('awayTeam', {}).get('id') in teams_dict['team_id']:
                             games.append(game)
                         else:
-                            print(f"Skipping game {g['id']} due to unknown team IDs: Home {g.get('homeTeam', {}).get('id')}, Away {g.get('awayTeam', {}).get('id')}")
+                            logger.info(f"Skipping game {g['id']} due to unknown team IDs: Home {g.get('homeTeam', {}).get('id')}, Away {g.get('awayTeam', {}).get('id')}")
                         
 
             except json.JSONDecodeError:
                 pass
 
-    #print(games)
+    #logger.info(games)
     cursor.executemany("""
     INSERT INTO games (game_id, season_id, game_type, date, home_team_id, away_team_id, home_score, away_score, game_outcome, winning_goalie_id, winning_goal_scorer_id, series_status_round)
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -148,7 +165,7 @@ def update_games_table(year):
     """, games)
     connection.commit()
 
-    print("Updated games:", updated_games)
+    logger.info("Updated games:", updated_games)
     return updated_games
 
 def update_seasons_end_standings(season_id):
@@ -185,7 +202,7 @@ def update_seasons_end_standings(season_id):
 
         seasons_end_standings_data = []
 
-        #print(season_id)
+        #logger.info(season_id)
 
         wins = 0
         preseason_wins = 0
@@ -206,19 +223,19 @@ def update_seasons_end_standings(season_id):
         games_played = 0
         preseason_games_played = 0
         playoff_games_played = 0
-        conference_name = ''
-        division_name = ''
+        conference_name = None
+        division_name = None
 
         if season_dict:
             team_data = season_dict.get(team_abbreviation, {})
-            conference_name = team_data.get('conferenceName', '')
-            division_name = team_data.get('divisionName', '')
+            conference_name = team_data.get('conferenceName', None)
+            division_name = team_data.get('divisionName', None)
 
         for game in games_data:
-            if game[5] != '':
+            if game[5] is not None:
                 if game[0] == season_id:
                     if game[1] == team_id:
-                        print(game)
+                        logger.info(game)
                         if game[6] == 1:
                             preseason_games_played += 1
                             preseason_goals_for += game[3]
@@ -253,7 +270,7 @@ def update_seasons_end_standings(season_id):
                                 else:
                                     playoff_losses += 1
                     elif game[2] == team_id:
-                        print(game)
+                        logger.info(game)
                         if game[6] == 1:
                             preseason_games_played += 1
                             preseason_goals_for += game[4]
@@ -289,14 +306,14 @@ def update_seasons_end_standings(season_id):
                                     playoff_losses += 1
 
         points = 2 * wins + ot_losses
-        #print(f"Season_id: {season_id}, Team_id: {team_id}, Wins: {wins}, Losses: {losses}, OT_Losses: {ot_losses}, Points: {points}, Goals_For: {goals_for}, Goals_Against: {goals_against}")
+        #logger.info(f"Season_id: {season_id}, Team_id: {team_id}, Wins: {wins}, Losses: {losses}, OT_Losses: {ot_losses}, Points: {points}, Goals_For: {goals_for}, Goals_Against: {goals_against}")
         seasons_end_standings_data.append((season_id, team_id, wins, losses, ot_losses, points, games_played, goals_for, goals_against, preseason_wins, preseason_losses, preseason_ot_losses, preseason_goals_for, preseason_goals_against, preseason_games_played, playoff_wins, playoff_losses, playoff_ot_losses, playoff_goals_for, playoff_goals_against, playoff_games_played, conference_name, division_name))
 
 
-        print(f"Standings: {seasons_end_standings_data}")
+        logger.info(f"Standings: {seasons_end_standings_data}")
         # Populate seasons_end_standings table
         cursor.executemany("""
-        INSERT IGNORE INTO seasons_end_standings (season_id, team_id, wins, losses, ot_losses, points, games_played, goals_for, goals_against, preseason_wins, preseason_losses, preseason_ot_losses, preseason_goals_for, preseason_goals_against, preseason_games_played, playoff_wins, playoff_losses, playoff_ot_losses, playoff_goals_for, playoff_goals_against, playoff_games_played, conference_name, division_name)
+        REPLACE INTO seasons_end_standings (season_id, team_id, wins, losses, ot_losses, points, games_played, goals_for, goals_against, preseason_wins, preseason_losses, preseason_ot_losses, preseason_goals_for, preseason_goals_against, preseason_games_played, playoff_wins, playoff_losses, playoff_ot_losses, playoff_goals_for, playoff_goals_against, playoff_games_played, conference_name, division_name)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, seasons_end_standings_data)
 
@@ -318,52 +335,52 @@ def update_events_table(season_id, updated_game_ids):
 
     for idx, game_id in enumerate(game_ids, 1):
         if idx % 100 == 0 or idx == 1 or idx == total_games:
-            print(f"Processing game {idx} of {total_games} (game_id: {game_id}) for season {season_id}")
+            logger.info(f"Processing game {idx} of {total_games} (game_id: {game_id}) for season {season_id}")
         url = url_base + str(game_id) + '/play-by-play'
-        #print(url)
+        #logger.info(url)
         response = requests.get(url)
 
         if response.text.strip():
             try:
                 data = json.loads(response.text)
-                #print(data)
+                #logger.info(data)
                 if 'plays' in data:
                     plays_data = []
                     for play in data['plays']:
                         # Extract play data
                         periodDescriptor = play.get('periodDescriptor', {})
                         details = play.get('details', {})
-                        #print(play['typeDescKey'])
-                        #print(details)
+                        #logger.info(play['typeDescKey'])
+                        #logger.info(details)
                         play_data = (
-                            play.get('eventId', -1),
+                            play.get('eventId', None),
                             game_id,
-                            periodDescriptor.get('number', -1),
-                            periodDescriptor.get('periodType', ''),
-                            play.get('timeInPeriod', ''),
-                            play.get('timeRemaining', ''),
-                            play.get('situationCode', -1),
-                            play.get('homeTeamDefendingSide', ''),
-                            play.get('typeCode', -1),
-                            play.get('typeDescKey', ''),
-                            play.get('sortOrder', -1),
-                            details.get('xCoord', -1),
-                            details.get('yCoord', -1),
-                            details.get('zoneCode', ''),
-                            details.get('shotType', ''),
-                            details.get('blockingPlayerId', -1),
-                            details.get('shootingPlayerId', -1),
-                            details.get('goalieInNetId', -1),
-                            details.get('playerId', -1),
-                            details.get('eventOwnerTeamId', -1),
-                            details.get('awaySOG', -1),
-                            details.get('homeSOG', -1),
-                            details.get('hittingPlayerId', -1),
-                            details.get('hitteePlayerId', -1),
-                            details.get('reason', ''),
-                            details.get('secondaryReason', ''),
-                            details.get('losingPlayerId', -1),
-                            details.get('winningPlayerId', -1)
+                            periodDescriptor.get('number', None),
+                            periodDescriptor.get('periodType', None),
+                            play.get('timeInPeriod', None),
+                            play.get('timeRemaining', None),
+                            play.get('situationCode', None),
+                            play.get('homeTeamDefendingSide', None),
+                            play.get('typeCode', None),
+                            play.get('typeDescKey', None),
+                            play.get('sortOrder', None),
+                            details.get('xCoord', None),
+                            details.get('yCoord', None),
+                            details.get('zoneCode', None),
+                            details.get('shotType', None),
+                            details.get('blockingPlayerId', None),
+                            details.get('shootingPlayerId', None),
+                            details.get('goalieInNetId', None),
+                            details.get('playerId', None),
+                            details.get('eventOwnerTeamId', None),
+                            details.get('awaySOG', None),
+                            details.get('homeSOG', None),
+                            details.get('hittingPlayerId', None),
+                            details.get('hitteePlayerId', None),
+                            details.get('reason', None),
+                            details.get('secondaryReason', None),
+                            details.get('losingPlayerId', None),
+                            details.get('winningPlayerId', None)
                         )
                         plays_data.append(play_data)
 
@@ -400,36 +417,36 @@ def update_roster_players_table(season_id):
         team_id = team[0]
         team_abv = teams_dict['team_abbreviation'][teams_dict['team_id'].index(team_id)]
 
-        print(f"Season ID: {season_id}, Team ID: {team_abv}")
+        logger.info(f"Season ID: {season_id}, Team ID: {team_abv}")
 
         url = f"https://api-web.nhle.com/v1/roster/{team_abv}/{season_id}"
-        #print(url)
+        #logger.info(url)
         response = requests.get(url)
 
         if response.text.strip():
             try:
                 data = json.loads(response.text)
-                #print(data)
+                #logger.info(data)
                 roster_data = []
                 if 'forwards' in data:
                     for player in data['forwards']:
                         # Extract player data
                         player_data = (
-                            player.get('id', -1),
+                            player.get('id', None),
                             team_id,
                             season_id,
-                            player.get('firstName', {}).get('default', ''),
-                            player.get('lastName', {}).get('default', ''),
-                            player.get('sweaterNumber', -1),
-                            player.get('positionCode', ''),
-                            player.get('shootsCatches', ''),
-                            player.get('heightInInches', -1),
-                            player.get('weightInPounds', -1),
-                            player.get('heightInCentimeters', -1),
-                            player.get('weightInKilograms', -1),
-                            player.get('birthDate', ''),
-                            player.get('birthCity', {}).get('default', ''),
-                            player.get('birthCountry', '')
+                            player.get('firstName', {}).get('default', None),
+                            player.get('lastName', {}).get('default', None),
+                            player.get('sweaterNumber', None),
+                            player.get('positionCode', None),
+                            player.get('shootsCatches', None),
+                            player.get('heightInInches', None),
+                            player.get('weightInPounds', None),
+                            player.get('heightInCentimeters', None),
+                            player.get('weightInKilograms', None),
+                            player.get('birthDate', None),
+                            player.get('birthCity', {}).get('default', None),
+                            player.get('birthCountry', None)
                         )
                         roster_data.append(player_data)
 
@@ -437,21 +454,21 @@ def update_roster_players_table(season_id):
                     for player in data['defensemen']:
                         # Extract player data
                         player_data = (
-                            player.get('id', -1),
+                            player.get('id', None),
                             team_id,
                             season_id,
-                            player.get('firstName', {}).get('default', ''),
-                            player.get('lastName', {}).get('default', ''),
-                            player.get('sweaterNumber', -1),
-                            player.get('positionCode', ''),
-                            player.get('shootsCatches', ''),
-                            player.get('heightInInches', -1),
-                            player.get('weightInPounds', -1),
-                            player.get('heightInCentimeters', -1),
-                            player.get('weightInKilograms', -1),
-                            player.get('birthDate', ''),
-                            player.get('birthCity', {}).get('default', ''),
-                            player.get('birthCountry', '')
+                            player.get('firstName', {}).get('default', None),
+                            player.get('lastName', {}).get('default', None),
+                            player.get('sweaterNumber', None),
+                            player.get('positionCode', None),
+                            player.get('shootsCatches', None),
+                            player.get('heightInInches', None),
+                            player.get('weightInPounds', None),
+                            player.get('heightInCentimeters', None),
+                            player.get('weightInKilograms', None),
+                            player.get('birthDate', None),
+                            player.get('birthCity', {}).get('default', None),
+                            player.get('birthCountry', None)
                         )
                         roster_data.append(player_data)
 
@@ -459,25 +476,25 @@ def update_roster_players_table(season_id):
                     for player in data['goalies']:
                         # Extract player data
                         player_data = (
-                            player.get('id', -1),
+                            player.get('id', None),
                             team_id,
                             season_id,
-                            player.get('firstName', {}).get('default', ''),
-                            player.get('lastName', {}).get('default', ''),
-                            player.get('sweaterNumber', -1),
-                            player.get('positionCode', ''),
-                            player.get('shootsCatches', ''),
-                            player.get('heightInInches', -1),
-                            player.get('weightInPounds', -1),
-                            player.get('heightInCentimeters', -1),
-                            player.get('weightInKilograms', -1),
-                            player.get('birthDate', ''),
-                            player.get('birthCity', {}).get('default', ''),
-                            player.get('birthCountry', '')
+                            player.get('firstName', {}).get('default', None),
+                            player.get('lastName', {}).get('default', None),
+                            player.get('sweaterNumber', None),
+                            player.get('positionCode', None),
+                            player.get('shootsCatches', None),
+                            player.get('heightInInches', None),
+                            player.get('weightInPounds', None),
+                            player.get('heightInCentimeters', None),
+                            player.get('weightInKilograms', None),
+                            player.get('birthDate', None),
+                            player.get('birthCity', {}).get('default', None),
+                            player.get('birthCountry', None)
                         )
                         roster_data.append(player_data)
 
-                #print(roster_data)
+                #logger.info(roster_data)
 
                 # Insert roster data into the database
                 cursor.executemany("""
@@ -490,10 +507,10 @@ def update_roster_players_table(season_id):
                 """, roster_data)
                 connection.commit()
 
-                #print("Rows inserted:", cursor.rowcount)
+                #logger.info("Rows inserted:", cursor.rowcount)
 
             except json.JSONDecodeError:
-                print(f"JSONDecodeError for season ID {season_id} and team ID {team_abv}.")
+                logger.info(f"JSONDecodeError for season ID {season_id} and team ID {team_abv}.")
                 pass
 
 def update_players_season_table(season_id):
@@ -510,7 +527,7 @@ def update_players_season_table(season_id):
         player_id = p_id[0]
         url = url_base + str(player_id)
         response = requests.get(url)
-        print(player_id)
+        logger.info(player_id)
         if response.text.strip():
             try:
                 data = json.loads(response.text)
@@ -519,32 +536,32 @@ def update_players_season_table(season_id):
                         # Extract player data
 
                         player = (
-                            season.get('assists', -1),
-                            season.get('evGoals', -1),
-                            season.get('evPoints', -1),
-                            season.get('faceoffWinPct', -1),
-                            season.get('gameWinningGoals', -1),
-                            season.get('gamesPlayed', -1),
-                            season.get('goals', -1),
-                            season.get('lastName', ''),
-                            season.get('otGoals', -1),
-                            season.get('penaltyMinutes', -1),
+                            season.get('assists', None),
+                            season.get('evGoals', None),
+                            season.get('evPoints', None),
+                            season.get('faceoffWinPct', None),
+                            season.get('gameWinningGoals', None),
+                            season.get('gamesPlayed', None),
+                            season.get('goals', None),
+                            season.get('lastName', None),
+                            season.get('otGoals', None),
+                            season.get('penaltyMinutes', None),
                             player_id,
-                            season.get('plusMinus', -1),
-                            season.get('points', -1),
-                            season.get('pointsPerGame', -1),
-                            season.get('positionCode', ''),
-                            season.get('ppGoals', -1),
-                            season.get('ppPoints', -1),
-                            season.get('seasonId', -1),
-                            season.get('shGoals', -1),
-                            season.get('shPoints', -1),
-                            season.get('shootingPct', -1),
-                            season.get('shootsCatches', ''),
-                            season.get('shots', -1),
-                            season.get('skaterFullName', ''),
-                            season.get('teamAbbrevs', ''),
-                            season.get('timeOnIcePerGame', -1)
+                            season.get('plusMinus', None),
+                            season.get('points', None),
+                            season.get('pointsPerGame', None),
+                            season.get('positionCode', None),
+                            season.get('ppGoals', None),
+                            season.get('ppPoints', None),
+                            season.get('seasonId', None),
+                            season.get('shGoals', None),
+                            season.get('shPoints', None),
+                            season.get('shootingPct', None),
+                            season.get('shootsCatches', None),
+                            season.get('shots', None),
+                            season.get('skaterFullName', None),
+                            season.get('teamAbbrevs', None),
+                            season.get('timeOnIcePerGame', None)
 
                         )
 
@@ -556,7 +573,7 @@ def update_players_season_table(season_id):
                         """, player)
                         connection.commit()
 
-                        #print("Rows inserted:", cursor.rowcount)
+                        #logger.info("Rows inserted:", cursor.rowcount)
 
             except json.JSONDecodeError:
                 pass
@@ -573,7 +590,7 @@ def update_players_table(season_id):
     players = cursor.fetchall()
 
     for player in players:
-        print(player[0])
+        logger.info(player[0])
         player_id = player[0]
         skater_full_name = player[1]
         position_code = player[2]
@@ -608,56 +625,71 @@ def update_players_table(season_id):
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (player_id, skater_full_name, birth_date, birth_city, birth_country, position_code, shoots_catches, total_games_played, total_assists, total_goals, total_points, total_penalty_minutes, total_games_played, total_plus_minus))
         connection.commit()
-        #print("Rows inserted:", cursor.rowcount)    
+        #logger.info("Rows inserted:", cursor.rowcount)    
 
 
 def main():
+    try:
+        logger.info("=== Starting NHL Data Update ===")
+        
+        last_game_id, last_season_id, last_date = get_last_date_updated_db()
+        current_season = get_current_season()
 
-    last_game_id, last_season_id, last_date = get_last_date_updated_db()
-    current_season = get_current_season()
+        logger.info(f"Last game ID: {last_game_id}")
+        logger.info(f"Last season in DB: {last_season_id}")
+        logger.info(f"Last date: {last_date}")
+        logger.info(f"Current season: {current_season}")
 
-    print(f"Last game ID: {last_game_id}")
-    print(f"Last season in DB: {last_season_id}")
-    print(f"Last date: {last_date}")
-    print(f"Current season: {current_season}")
+        #last_season_int = 2024# = int(str(last_season_in_db)[:4]) not used because up to date
+        current_season_int = int(str(current_season)[:4])
 
-    #last_season_int = 2024# = int(str(last_season_in_db)[:4]) not used because up to date
-    current_season_int = int(str(current_season)[:4])
+        #do everything for each season
+        for year in range(current_season_int, current_season_int + 1):
+            season_id = int(str(year) + str(year + 1))
 
-    #do everything for each season
-    for year in range(current_season_int, current_season_int + 1):
-        season_id = int(str(year) + str(year + 1))
+            logger.info("update seasons table")
+            #update_seasons_table(season_id)
 
-        print("update seasons table")
-        #update_seasons_table(season_id)
+            logger.info("update games table")
+            updated_game_ids = update_games_table(year)
 
-        print("update games table")
-        updated_game_ids = update_games_table(year)
+            #seasons_end_standings --------------------------------------------------
 
-        #seasons_end_standings --------------------------------------------------
+            logger.info("update seasons end standings table")
+            update_seasons_end_standings(season_id)#could use updated_game_ids but it's a lot of extra logic for not much more efficiency
 
-        print("update seasons end standings table")
-        update_seasons_end_standings(season_id)#could use updated_game_ids but it's a lot of extra logic for not much more efficiency
+            #event table --------------------------------------------
 
-        #event table --------------------------------------------
+            logger.info("update events table")
+            update_events_table(season_id, updated_game_ids)#updated_game_ids limits repeating events and saves a lot of time
 
-        print("update events table")
-        update_events_table(season_id, updated_game_ids)#updated_game_ids limits repeating events and saves a lot of time
+            #roster_players table --------------------------------------------------
 
-        #roster_players table --------------------------------------------------
+            logger.info("update roster players table")
+            update_roster_players_table(season_id)
 
-        print("update roster players table")
-        update_roster_players_table(season_id)
+            #players_season table --------------------------------------------------
 
-        #players_season table --------------------------------------------------
+            logger.info("update players season table")
+            update_players_season_table(season_id)
 
-        print("update players season table")
-        update_players_season_table(season_id)
+            #players table --------------------------------------------------
 
-        #players table --------------------------------------------------
+            logger.info("update players table")
+            update_players_table(season_id)
 
-        print("update players table")
-        update_players_table(season_id)
+    except Exception as e:
+        logger.error(f"=== ERROR: NHL Data Update Failed ===")
+        logger.error(f"Error: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        sys.exit(1)  # Exit with error code for cron monitoring
+    
+    finally:
+        # Close database connection
+        if 'connection' in globals() and connection.is_connected():
+            cursor.close()
+            connection.close()
+            logger.info("Database connection closed")
 
 
 if __name__ == '__main__':
