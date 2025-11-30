@@ -82,7 +82,7 @@ def update_games_table(year):
     games = []
     url_base = 'https://api-web.nhle.com/v1/club-schedule-season/'
     updated_games = []
-    today = datetime.now().date()
+    today = datetime.now().date() + timedelta(days=170)  # Add 5 days
 
     # Get existing game IDs
     season_id = str(year) + str(year + 1)
@@ -119,23 +119,27 @@ def update_games_table(year):
                             continue
                         updated_games.append(g['id'])
 
-
-
+                        iso_datetime = g.get('startTimeUTC', None)
+                        mysql_datetime = iso_datetime.replace('T', ' ').replace('Z', '') if iso_datetime else None
+                        
+                        #logger.info(mysql_datetime) 
                         #logger.info(g)
                         game = (
                             g['id'],
                             g.get('season', None),
                             g.get('gameType', None),
                             g.get('gameDate', None),
+                            mysql_datetime,
+
                             g.get('homeTeam', {}).get('id', None),
                             g.get('awayTeam', {}).get('id', None),
                             g.get('homeTeam', {}).get('score', None),
                             g.get('awayTeam', {}).get('score', None),
 
-                            g.get('gameOutcome', {}).get('lastPeriodType', None),  # Use get method with default value None
-                            g.get('winningGoalie', {}).get('playerId', None),  # Use get method with default value None
-                            g.get('winningGoalScorer', {}).get('playerId', None),  # Use get method with default value None
-                            g.get('seriesStatus', {}).get('round', None),  # Use get method with default value None
+                            g.get('gameOutcome', {}).get('lastPeriodType', None), 
+                            g.get('winningGoalie', {}).get('playerId', None), 
+                            g.get('winningGoalScorer', {}).get('playerId', None), 
+                            g.get('seriesStatus', {}).get('round', None),
                         )
                         if  g.get('homeTeam', {}).get('id') in teams_dict['team_id'] and g.get('awayTeam', {}).get('id') in teams_dict['team_id']:
                             games.append(game)
@@ -148,12 +152,13 @@ def update_games_table(year):
 
     #logger.info(games)
     cursor.executemany("""
-    INSERT INTO games (game_id, season_id, game_type, date, home_team_id, away_team_id, home_score, away_score, game_outcome, winning_goalie_id, winning_goal_scorer_id, series_status_round)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    INSERT INTO games (game_id, season_id, game_type, date, start_time_UTC, home_team_id, away_team_id, home_score, away_score, game_outcome, winning_goalie_id, winning_goal_scorer_id, series_status_round)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON DUPLICATE KEY UPDATE
         season_id = VALUES(season_id),
         game_type = VALUES(game_type),
         date = VALUES(date),
+        start_time_UTC = VALUES(start_time_UTC),
         home_team_id = VALUES(home_team_id),
         away_team_id = VALUES(away_team_id),
         home_score = VALUES(home_score),
@@ -372,6 +377,9 @@ def update_events_table(season_id, updated_game_ids):
                             details.get('shootingPlayerId', None),
                             details.get('goalieInNetId', None),
                             details.get('playerId', None),
+                            details.get('scoringPlayerId', None),
+                            details.get('assist1PlayerId', None),
+                            details.get('assist2PlayerId', None),
                             details.get('eventOwnerTeamId', None),
                             details.get('awaySOG', None),
                             details.get('homeSOG', None),
@@ -380,7 +388,13 @@ def update_events_table(season_id, updated_game_ids):
                             details.get('reason', None),
                             details.get('secondaryReason', None),
                             details.get('losingPlayerId', None),
-                            details.get('winningPlayerId', None)
+                            details.get('winningPlayerId', None),
+                            details.get('highlightClipSharingUrl', None),
+                            details.get('duration', None),
+
+                            details.get('servedByPlayerId', None),
+                            details.get('drawnByPlayerId', None),
+                            details.get('committedByPlayerId', None)
                         )
                         plays_data.append(play_data)
 
@@ -390,11 +404,11 @@ def update_events_table(season_id, updated_game_ids):
                     INSERT IGNORE INTO events (
                         event_id, game_id, period_number, period_type, time_in_period, time_remaining, situation_code,
                         home_team_defending_side, type_code, type_desc_key, sort_order, x_coord, y_coord, zone_code,
-                        shot_type, blocking_player_id, shooting_player_id, goalie_in_net_id, player_id, event_owner_team_id,
+                        shot_type, blocking_player_id, shooting_player_id, goalie_in_net_id, player_id, scoring_player_id, assist1_player_id, assist2_player_id, event_owner_team_id,
                         away_sog, home_sog, hitting_player_id, hittee_player_id, reason, secondary_reason,
-                        losing_player_id, winning_player_id
+                        losing_player_id, winning_player_id, highlight_clip_sharing_url, duration, served_by_player_id, drawn_by_player_id, committed_by_player_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """, plays_data)
                     connection.commit()
             except json.JSONDecodeError:
@@ -676,7 +690,7 @@ def main():
             #players table --------------------------------------------------
 
             logger.info("update players table")
-            update_players_table(season_id)
+            update_players_table(season_id)#maybe keep track of updated players to limit updates?
 
     except Exception as e:
         logger.error(f"=== ERROR: NHL Data Update Failed ===")
